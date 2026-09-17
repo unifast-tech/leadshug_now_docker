@@ -1,0 +1,79 @@
+name: Verify workspace
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    name: Validate Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the runtime topology
+        env:
+          SESSION_SECRET: ci-session-secret
+          INTERNAL_SERVICE_TOKEN: ci-internal-token
+          WHATSAPP_TOKEN: ci-whatsapp-token
+        run: docker compose config --quiet
+
+  api:
+    name: API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout the private API submodule
+        env:
+          SUBMODULES_REPO_TOKEN: ${{ secrets.SUBMODULES_REPO_TOKEN }}
+        run: |
+          test -n "$SUBMODULES_REPO_TOKEN" || {
+            echo "SUBMODULES_REPO_TOKEN must read the private LeadsHug submodules." >&2
+            exit 1
+          }
+          git config --global url."https://x-access-token:${SUBMODULES_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git submodule sync -- api-app
+          git submodule update --init --depth=1 api-app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api-app/package-lock.json
+      - name: Install, lint, build, and test API
+        working-directory: api-app
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+          npm test
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout the private Web submodule
+        env:
+          SUBMODULES_REPO_TOKEN: ${{ secrets.SUBMODULES_REPO_TOKEN }}
+        run: |
+          test -n "$SUBMODULES_REPO_TOKEN" || {
+            echo "SUBMODULES_REPO_TOKEN must read the private LeadsHug submodules." >&2
+            exit 1
+          }
+          git config --global url."https://x-access-token:${SUBMODULES_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git submodule sync -- web-app
+          git submodule update --init --depth=1 web-app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-app/package-lock.json
+      - name: Install, build, and test Web
+        working-directory: web-app
+        run: |
+          npm ci
+          npm run build
+          npm test

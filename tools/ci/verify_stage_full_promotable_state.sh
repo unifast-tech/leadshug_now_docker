@@ -1,1 +1,0 @@
-../../delphi-ai/tools/verify_stage_full_promotable_state.sh

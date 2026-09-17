@@ -3,16 +3,9 @@
 **/.env.*
 !**/.env.example
 
-laravel-app/.composer
-laravel-app/vendor
-laravel-app/storage/logs
-laravel-app/storage/framework/cache
-laravel-app/storage/framework/sessions
-laravel-app/storage/framework/views
-laravel-app/storage/framework/testing
-
-flutter-app
-web-app
-foundation_documentation
+api-app/node_modules
+api-app/dist
+web-app/node_modules
+web-app/dist
 .git
 .github

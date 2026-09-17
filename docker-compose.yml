@@ -1,168 +1,60 @@
 services:
-  mongo:
-    image: mongo:7
+  postgres:
+    image: postgres:16
     restart: unless-stopped
-    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-leadshug}
+      POSTGRES_USER: ${POSTGRES_USER:-leadshug}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadshug}
     ports:
-      - "27017:27017"
+      - "${POSTGRES_HOST_PORT:-55433}:5432"
     volumes:
-      - mongo-data:/data/db
-    networks:
-      - app-network
+      - leadshug_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' | grep 1 > /dev/null"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
-      retries: 20
-    profiles:
-      - local-db
+      retries: 10
 
-  mongo-init:
-    image: mongo:7
-    depends_on:
-      mongo:
-        condition: service_healthy
-    networks:
-      - app-network
-    entrypoint: >
-      bash -lc "mongosh --host mongo:27017 --quiet --eval '
-      try { rs.status().ok } catch (e) { rs.initiate({_id:\"rs0\", members:[{_id:0, host:\"mongo:27017\"}]}) }
-      '"
-    restart: "no"
-    profiles:
-      - local-db
-
-  app:
-    image: ${APP_IMAGE:-belluga-now-app:local}
+  api:
     build:
-      context: .
-      dockerfile: ./docker/laravel-app/Dockerfile
+      context: ./api-app
     depends_on:
-      mongo-init:
-        condition: service_completed_successfully
-        required: false
-    volumes:
-      - ./laravel-app:/var/www
-      - ./web-app:/opt/flutter-web-shell:ro
-      - app-storage:/var/www/storage
+      postgres:
+        condition: service_healthy
     environment:
-      LOG_CHANNEL: ${LOG_CHANNEL:-stack}
-      LOG_STACK: ${LOG_STACK:-mongodb,stderr}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_MONGODB_COLLECTION: ${LOG_MONGODB_COLLECTION:-application_logs}
-      LOG_MONGODB_RETENTION_DAYS: ${LOG_MONGODB_RETENTION_DAYS:-14}
-      FLUTTER_WEB_SHELL_PATH: /opt/flutter-web-shell/index.html
-    networks:
-      - app-network
+      DATABASE_URL: postgresql://${POSTGRES_USER:-leadshug}:${POSTGRES_PASSWORD:-leadshug}@postgres:5432/${POSTGRES_DB:-leadshug}?schema=public
+      PORT: "3000"
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?Set INTERNAL_SERVICE_TOKEN in .env}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:?Set WHATSAPP_TOKEN in .env}
+      LH_ARQUIVOS_DIR: /dados/arquivos
+    volumes:
+      - leadshug_arquivos:/dados/arquivos
+    ports:
+      - "${API_HOST_PORT:-3000}:3000"
     healthcheck:
-      test: ["CMD-SHELL", "php -r \"exit(@fsockopen('127.0.0.1', 9000) ? 0 : 1);\""]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
     restart: unless-stopped
 
-  worker:
-    image: ${WORKER_IMAGE:-belluga-now-worker:local}
+  web:
     build:
-      context: .
-      dockerfile: ./docker/laravel-app/Dockerfile
+      context: ./web-app
     depends_on:
-      mongo-init:
-        condition: service_completed_successfully
-        required: false
-      app:
+      api:
         condition: service_healthy
-    volumes:
-      - ./laravel-app:/var/www
-      - app-storage:/var/www/storage
     environment:
-      LOG_CHANNEL: ${LOG_CHANNEL:-stack}
-      LOG_STACK: ${LOG_STACK:-mongodb,stderr}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_MONGODB_COLLECTION: ${LOG_MONGODB_COLLECTION:-application_logs}
-      LOG_MONGODB_RETENTION_DAYS: ${LOG_MONGODB_RETENTION_DAYS:-14}
-    networks:
-      - app-network
-    command: ["sh", "/var/www/scripts/run_queue_worker.sh"]
-    restart: unless-stopped
-
-  scheduler:
-    image: ${SCHEDULER_IMAGE:-belluga-now-scheduler:local}
-    build:
-      context: .
-      dockerfile: ./docker/laravel-app/Dockerfile
-    depends_on:
-      mongo-init:
-        condition: service_completed_successfully
-        required: false
-      app:
-        condition: service_healthy
-    volumes:
-      - ./laravel-app:/var/www
-      - app-storage:/var/www/storage
-    environment:
-      LOG_CHANNEL: ${LOG_CHANNEL:-stack}
-      LOG_STACK: ${LOG_STACK:-mongodb,stderr}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_MONGODB_COLLECTION: ${LOG_MONGODB_COLLECTION:-application_logs}
-      LOG_MONGODB_RETENTION_DAYS: ${LOG_MONGODB_RETENTION_DAYS:-14}
-    networks:
-      - app-network
-    command: ["sh", "-lc", "while true; do php artisan schedule:run; sleep 60; done"]
-    restart: unless-stopped
-
-  nginx:
-    image: ${NGINX_IMAGE:-belluga-now-nginx:local}
-    build: ./docker/nginx
-    env_file: .env
+      PORT: "80"
+      LEADSHUG_API_URL: ${LEADSHUG_API_URL:-http://localhost:3000}
     ports:
-      - "${NGINX_HOST_PORT_80}:80"
-      - "${NGINX_HOST_PORT_443}:443"
-    volumes:
-      - ./laravel-app:/var/www
-      - ./web-app:/opt/flutter-web-shell:ro
-      - ./project/nginx:/etc/nginx/project:ro
-      - app-storage:/var/www/storage
-      - certbot-data:/etc/letsencrypt
-      - certbot-challenge:/var/www/certbot
-    depends_on:
-      - app
-    networks:
-      - app-network
+      - "${WEB_HOST_PORT:-8080}:80"
     restart: unless-stopped
-
-  certbot:
-    image: certbot/certbot
-    volumes:
-      - certbot-data:/etc/letsencrypt
-      - certbot-challenge:/var/www/certbot
-    env_file: .env
-    command: >
-      sh -c "certbot certonly --webroot --webroot-path=/var/www/certbot \
-        --email ${CERTBOT_EMAIL} -d ${DOMAIN} --agree-tos --no-eff-email \
-        --force-renewal && \
-        while true; do certbot renew; sleep 12h; done"
-    profiles:
-      - production
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    restart: unless-stopped
-    depends_on:
-      - nginx
-    networks:
-      - app-network
-    profiles:
-      - local-tunnel
-
-networks:
-  app-network:
-    driver: bridge
 
 volumes:
-  certbot-data:
-  certbot-challenge:
-  app-storage:
-  mongo-data:
+  leadshug_pg_data:
+  leadshug_arquivos:
